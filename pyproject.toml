@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "fabric_mcp_common"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared plumbing for FABRIC MCP servers — token authentication, Prometheus instrumentation, and structured logging"
 authors = [
   { name = "Komal Thareja", email = "kthare10@renci.org" },

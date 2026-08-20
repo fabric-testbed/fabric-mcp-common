@@ -230,6 +230,40 @@ logging.getLogger("fabric.common").setLevel(logging.DEBUG)
 `configure_logging()` does this for you. Miss it and the library's debug output is
 unreachable — the root logger is deliberately held at WARNING.
 
+### 7. Installer boilerplate
+
+Every FABRIC MCP server's `install.sh` needs the same opening moves: coloured logging,
+OS and package-manager detection, idempotent package installation, finding a new enough
+Python, creating a venv. That lives here as a shell library instead of being copied per
+server.
+
+```bash
+FMC_RAW="https://raw.githubusercontent.com/fabric-testbed/fabric-mcp-common/main"
+curl -fsSL "$FMC_RAW/fabric_mcp_common/templates/install-common.sh" -o /tmp/install-common.sh
+source /tmp/install-common.sh
+
+detect_os                 # sets OS, PKG_MGR
+ensure_command git        # install if absent, no-op if present
+ensure_python             # sets PYTHON to a 3.11+ interpreter, installing if needed
+ensure_venv "$VENV_DIR"   # create if absent, then upgrade pip inside it
+```
+
+Bootstrap installers run **before** any virtualenv exists, so they cannot import this
+package to locate the file — fetch it over HTTPS as above. Anything running *after*
+installation can skip the network:
+
+```python
+from fabric_mcp_common.templates import install_script_path, install_script_url
+
+install_script_path()   # packaged path, resolves from an installed wheel
+install_script_url()    # canonical raw URL, for cold-start installers
+```
+
+Tunables, set before sourcing: `FMC_PYTHON_MIN_MINOR` (default `11`) and
+`FMC_PYTHON_CANDIDATES`. Callers are expected to sanity-check that the functions they
+rely on are defined after sourcing, so a version skew fails immediately with a clear
+message rather than as `command not found` mid-install.
+
 
 ---
 

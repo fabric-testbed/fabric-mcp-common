@@ -30,7 +30,7 @@ or call :func:`fabric_mcp_common.logging.configure_logging`, which does it.
 """
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 #: Parent logger for everything in this package.  Configure this one name to
 #: capture all current and future subpackages.

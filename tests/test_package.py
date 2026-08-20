@@ -36,6 +36,18 @@ class TestTopLevel:
     def test_version_is_exposed(self):
         assert pkg.__version__.count(".") == 2
 
+    def test_version_matches_package_metadata(self):
+        # The version is declared twice — pyproject.toml and __init__.py — so
+        # they can drift. Installed metadata comes from pyproject, so comparing
+        # against it catches a bump applied to only one of the two.
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            declared = version("fabric_mcp_common")
+        except PackageNotFoundError:  # pragma: no cover - not installed
+            pytest.skip("fabric_mcp_common is not installed")
+        assert pkg.__version__ == declared
+
     def test_logger_namespace_is_a_single_parent(self):
         # One name must cover every subpackage, present and future.
         assert pkg.LOGGER_NAMESPACE == "fabric.common"
