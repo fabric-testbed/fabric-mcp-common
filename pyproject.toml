@@ -1,0 +1,77 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "fabric_mcp_common"
+version = "0.1.0"
+description = "Shared plumbing for FABRIC MCP servers — token authentication, Prometheus instrumentation, and structured logging"
+authors = [
+  { name = "Komal Thareja", email = "kthare10@renci.org" },
+]
+
+readme = { file = "README.md", content-type = "text/markdown" }
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+
+# The core (auth + logging) is intentionally dependency-free: it is all standard
+# library. Everything with a third-party requirement is an extra.
+dependencies = []
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Security",
+  "Topic :: System :: Monitoring",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://fabric-testbed.net/"
+Sources = "https://github.com/fabric-testbed/fabric-mcp-common"
+
+[project.optional-dependencies]
+# Prometheus instrumentation (fabric_mcp_common.metrics).
+metrics = [
+  "prometheus-client",
+  "starlette",
+]
+# Cryptographic verification against CredMgr JWKS (wraps fss_utils.JWTValidator,
+# which brings in pyjwt + cryptography).
+verify = [
+  "fabric_fss_utils>=1.5.1",
+]
+# FastMCP request-context adapter.
+fastmcp = [
+  "fastmcp",
+]
+# Everything.
+all = [
+  "prometheus-client",
+  "starlette",
+  "fabric_fss_utils>=1.5.1",
+  "fastmcp",
+]
+test = [
+  "pytest",
+  "pytest-cov",
+  "prometheus-client",
+  "starlette",
+  "httpx2",           # starlette.testclient transport
+]
+
+[tool.flit.module]
+name = "fabric_mcp_common"
+
+[tool.flit.sdist]
+include = ["tests/"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+
+[tool.isort]
+profile = "black"
+src_paths = ["fabric_mcp_common"]
