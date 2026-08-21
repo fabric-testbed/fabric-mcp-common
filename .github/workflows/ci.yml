@@ -67,6 +67,54 @@ jobs:
       - name: Import the stdlib-only subpackages
         run: python -c "import fabric_mcp_common.auth, fabric_mcp_common.logging, fabric_mcp_common.net"
 
+  fastmcp-contract:
+    # The unit tests stub fastmcp out, deliberately — so nothing there would
+    # notice upstream renaming or re-signaturing the one function the adapter
+    # depends on, fastmcp.server.dependencies.get_http_headers. This installs the
+    # [fastmcp] extra and drives the adapter through fastmcp's real ASGI app.
+    #
+    # It matters most for the authorization header: fastmcp *strips* that by
+    # default, and the adapter opts back in with include=. Lose that and every
+    # authenticated call silently looks anonymous rather than failing loudly.
+    name: fastmcp contract (latest release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install with the fastmcp and test extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[fastmcp,test]'
+      - name: Show the resolved fastmcp
+        run: pip list | grep -iE '^(fastmcp|fastmcp-slim|mcp) '
+      - name: Run the whole suite, contract tests included
+        run: python -m pytest -q
+
+  fastmcp-contract-prerelease:
+    # Early warning for the next major. The [fastmcp] extra is intentionally
+    # unpinned, so consumers will get 4.x when it goes final — this says whether
+    # the adapter is ready. Non-blocking on purpose: a broken upstream beta is
+    # information, not a defect in this repo.
+    name: fastmcp contract (prerelease, advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the newest fastmcp, prereleases allowed
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+          pip install --pre --upgrade fastmcp
+      - name: Show the resolved fastmcp
+        run: pip list | grep -iE '^(fastmcp|fastmcp-slim|mcp) '
+      - name: Run the contract tests
+        run: python -m pytest tests/test_fastmcp_contract.py -q
+
   example:
     # The bundled skeleton must keep working, not just keep parsing. The library
     # suite checks its imports against this API; this actually runs it.

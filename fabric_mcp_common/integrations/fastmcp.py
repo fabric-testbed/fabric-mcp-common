@@ -60,7 +60,16 @@ def request_headers(
     """Headers of the in-flight FastMCP HTTP request.
 
     Args:
-        include: Header names to request from FastMCP.  ``None`` asks for all.
+        include: Headers to *un-exclude*, not a filter.  FastMCP strips a
+            blocklist by default — ``authorization`` among them — and *include*
+            names the ones to keep anyway.  So the result is "FastMCP's default
+            set, plus these", not "only these".
+
+            ``None`` therefore does **not** ask for all headers: it accepts
+            FastMCP's defaults, which means **no authorization header**.  The
+            default value keeps it, which is what makes :func:`current_token`
+            work; pass ``include=None`` only when you deliberately want the token
+            withheld.
 
     Returns:
         The headers, or ``{}`` when there is no HTTP request in scope — stdio
