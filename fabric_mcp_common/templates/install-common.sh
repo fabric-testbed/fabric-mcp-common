@@ -33,6 +33,10 @@
 # Guard against double-sourcing: re-sourcing would be harmless, but this keeps
 # the caller from paying for it and makes `source` idempotent.
 if [[ -n "${_FMC_INSTALL_COMMON_SOURCED:-}" ]]; then
+  # `|| true` looks unreachable to shellcheck (SC2317) and is, when this file is
+  # sourced — which is the supported use. It matters only if someone *executes*
+  # it, where `return` outside a function fails and would abort under `set -e`.
+  # shellcheck disable=SC2317
   return 0 2>/dev/null || true
 fi
 _FMC_INSTALL_COMMON_SOURCED=1

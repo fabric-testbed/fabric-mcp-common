@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The reason this schedule exists: a dependency can break the build with no
+  # change to this repo. fastmcp 4.0.0b3 and mcp 2.0.0 broke a downstream server
+  # that way, and PR-triggered CI would never have run. A nightly build turns
+  # "someone's deploy fails" into "CI went red overnight".
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # requires-python = ">=3.9", so the floor is tested too — the core is
+        # meant to be stdlib-only and importable on old interpreters.
+        python: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install with the test extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+      - name: Run tests
+        run: python -m pytest -q
+
+  zero-dependency-core:
+    # A documented invariant: `pip install fabric_mcp_common` pulls nothing. It
+    # is easy to break by adding a top-level import, and nothing else catches it.
+    name: core installs with no dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the core alone
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+      - name: Assert nothing extra was pulled in
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          installed = {d.metadata["Name"].lower() for d in md.distributions()}
+          # Whatever the toolchain itself provides; anything else is a regression.
+          allowed = {"fabric-mcp-common", "fabric_mcp_common", "pip",
+                     "setuptools", "wheel", "flit-core", "flit_core"}
+          extra = {n for n in installed if n not in allowed}
+          print("installed:", sorted(installed))
+          assert not extra, f"core install pulled in dependencies: {sorted(extra)}"
+          PY
+      - name: Import the stdlib-only subpackages
+        run: python -c "import fabric_mcp_common.auth, fabric_mcp_common.logging, fabric_mcp_common.net"
+
+  example:
+    # The bundled skeleton must keep working, not just keep parsing. The library
+    # suite checks its imports against this API; this actually runs it.
+    name: example server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the example against this checkout
+        working-directory: examples/minimal-server
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e '../..'          # the library under test, not PyPI
+          pip install -e '.[test]'
+      - name: Run the example's tests
+        working-directory: examples/minimal-server
+        run: python -m pytest -q
+      - name: Boot it and list its tools
+        working-directory: examples/minimal-server
+        env:
+          MY_MCP_LOCAL_MODE: "1"
+        run: |
+          python - <<'PY'
+          import asyncio
+          import my_mcp.__main__ as m
+          names = sorted(t.name for t in asyncio.run(m.mcp.list_tools()))
+          print("tools:", names)
+          assert names, "no tools registered"
+          PY
+
+  package:
+    name: build and check artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip flit twine
+          python -m flit build
+      - name: twine check
+        run: python -m twine check dist/*
+      - name: Assert package data ships, and the example does not ship in the wheel
+        run: |
+          python - <<'PY'
+          import pathlib, zipfile, tarfile
+          wheel = next(pathlib.Path("dist").glob("*.whl"))
+          names = zipfile.ZipFile(wheel).namelist()
+          for required in ("fabric_mcp_common/dashboards/mcp-server.json",
+                          "fabric_mcp_common/templates/install-common.sh",
+                          "fabric_mcp_common/py.typed"):
+              assert required in names, f"{required} missing from the wheel"
+          assert not [n for n in names if n.startswith("examples/")], \
+              "examples/ must not ship in the wheel — it is a template"
+          sdist = next(pathlib.Path("dist").glob("*.tar.gz"))
+          members = tarfile.open(sdist).getnames()
+          assert any("examples/minimal-server" in m for m in members), \
+              "examples/ should ship in the sdist so its tests are runnable"
+          print("wheel and sdist contents OK")
+          PY
+
+  shell:
+    name: installer shell library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        # Strict on both: verified clean locally with shellcheck 0.11, so a
+        # finding here is a real regression rather than a pre-existing nit.
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -s bash fabric_mcp_common/templates/install-common.sh
+          shellcheck -s bash examples/minimal-server/install.sh
+      - name: Source it and exercise the contract
+        run: |
+          set -euo pipefail
+          source fabric_mcp_common/templates/install-common.sh
+          for fn in info ok warn err die detect_os pkg_install ensure_command \
+                    ensure_python ensure_venv; do
+            declare -F "$fn" >/dev/null || { echo "missing $fn"; exit 1; }
+          done
+          detect_os
+          ensure_python
+          ensure_venv "$(mktemp -d)/venv" >/dev/null
+          echo "shell library contract OK"
