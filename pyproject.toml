@@ -58,7 +58,12 @@ test = [
   "pytest-cov",
   "prometheus-client",
   "starlette",
-  "httpx2",           # starlette.testclient transport
+  # starlette.testclient's transport, and which one it wants depends on the
+  # starlette that resolves: <1.0 (all that installs on Python 3.9) needs httpx,
+  # >=1.0 needs httpx2. Declaring both is simpler and more durable than keying
+  # off python_version, and they coexist — the module names differ.
+  "httpx<1",
+  "httpx2",
 ]
 
 [tool.flit.module]
