@@ -27,6 +27,27 @@ ships in this package.
 
 ---
 
+## Starting a new server
+
+[`examples/minimal-server/`](examples/minimal-server/) is a runnable skeleton: auth,
+structured logging, Prometheus metrics, rate limiting, a Dockerfile, an installer that
+sources the shared shell library, and tests — with the security defaults already set
+correctly.
+
+```bash
+cp -r examples/minimal-server ../my-new-mcp && cd ../my-new-mcp
+python3 -m venv .venv && .venv/bin/pip install -e '.[test]'
+.venv/bin/python -m pytest
+MY_MCP_LOCAL_MODE=1 .venv/bin/python -m my_mcp
+```
+
+Its README documents the handful of things worth not re-deriving — chiefly why a
+rate-limit key may only come from unforgeable inputs, and why `X-Forwarded-For` is
+never one of them. This library's own test suite resolves every symbol the example
+imports, so an API change here fails *this* repo rather than someone else's build.
+
+---
+
 ## Install
 
 ```bash
