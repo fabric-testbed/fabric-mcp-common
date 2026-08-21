@@ -123,43 +123,80 @@ class TestIdentity:
 
 
 class TestRateLimitKey:
-    def test_keys_on_sub_when_authenticated(self, request_factory, bearer):
-        assert rate_limit_key(request_factory(bearer)) == "http://cilogon.org/serverA/users/12345"
+    """Keying, as of 0.3.0: verified claims only, and no untrusted header.
+
+    Peer in these tests is FakeRequest's default 10.0.0.9, so PEER_TRUSTED
+    stands in for "the proxy is configured".
+    """
+
+    PEER_TRUSTED = ("10.0.0.0/8",)
+
+    @staticmethod
+    def _verified(req, payload):
+        """Publish verified claims the way a verifying middleware would."""
+        setattr(req.state, CLAIMS_STATE_ATTR, TokenClaims(payload, verified=True))
+        return req
+
+    def test_keys_on_sub_when_claims_are_verified(self, request_factory):
+        req = self._verified(request_factory(), {"sub": "http://cilogon.org/serverA/users/12345"})
+        assert rate_limit_key(req) == "http://cilogon.org/serverA/users/12345"
+
+    def test_an_unverified_sub_is_ignored(self, request_factory, bearer):
+        # The 0.3.0 change: this used to return the sub from an unverified
+        # decode, which a caller can set to anything.
+        assert rate_limit_key(request_factory(bearer)) == "10.0.0.9"
+
+    def test_an_unverified_sub_is_used_when_explicitly_allowed(self, request_factory, bearer):
+        assert (
+            rate_limit_key(request_factory(bearer), require_verified=False)
+            == "http://cilogon.org/serverA/users/12345"
+        )
 
     def test_falls_back_to_ip_when_anonymous(self, request_factory):
         req = request_factory({"x-real-ip": "1.2.3.4"})
-        assert rate_limit_key(req) == "1.2.3.4"
+        assert rate_limit_key(req, trusted_proxies=self.PEER_TRUSTED) == "1.2.3.4"
 
     def test_falls_back_to_ip_for_undecodable_tokens(self, request_factory):
         req = request_factory({"authorization": "Bearer garbage", "x-real-ip": "1.2.3.4"})
-        assert rate_limit_key(req) == "1.2.3.4"
+        assert rate_limit_key(req, trusted_proxies=self.PEER_TRUSTED) == "1.2.3.4"
 
     def test_falls_back_when_the_chosen_claim_is_absent(self, request_factory):
-        tok = make_token({"email": "e@x.org"})
-        req = request_factory({"authorization": f"Bearer {tok}", "x-real-ip": "1.2.3.4"})
-        assert rate_limit_key(req) == "1.2.3.4"
+        req = self._verified(request_factory({"x-real-ip": "1.2.3.4"}), {"email": "e@x.org"})
+        assert rate_limit_key(req, trusted_proxies=self.PEER_TRUSTED) == "1.2.3.4"
 
-    def test_claim_is_configurable(self, request_factory, bearer):
-        assert rate_limit_key(request_factory(bearer), claim="uuid") == "user-uuid-1"
+    def test_claim_is_configurable(self, request_factory):
+        req = self._verified(request_factory(), {"uuid": "user-uuid-1"})
+        assert rate_limit_key(req, claim="uuid") == "user-uuid-1"
 
     def test_default_is_used_when_nothing_identifies_the_caller(self, request_factory):
         req = request_factory({}, client_host=None)
         assert rate_limit_key(req) == UNKNOWN_IP
         assert rate_limit_key(req, default="127.0.0.1") == "127.0.0.1"
 
-    def test_default_is_ignored_when_a_claim_or_ip_is_present(self, request_factory, bearer):
-        assert rate_limit_key(request_factory(bearer), default="127.0.0.1") != "127.0.0.1"
-        assert rate_limit_key(
-            request_factory({"x-real-ip": "1.2.3.4"}), default="127.0.0.1"
-        ) == "1.2.3.4"
+    def test_default_is_ignored_when_a_claim_or_ip_is_present(self, request_factory):
+        verified = self._verified(request_factory(), {"sub": "u"})
+        assert rate_limit_key(verified, default="127.0.0.1") != "127.0.0.1"
+        assert (
+            rate_limit_key(
+                request_factory({"x-real-ip": "1.2.3.4"}),
+                trusted_proxies=self.PEER_TRUSTED,
+                default="127.0.0.1",
+            )
+            == "1.2.3.4"
+        )
 
     def test_socket_peer_still_beats_the_default(self, request_factory):
         assert rate_limit_key(request_factory({}), default="127.0.0.1") == "10.0.0.9"
 
-    def test_key_is_stable_across_addresses_for_one_user(self, request_factory, bearer):
-        a = rate_limit_key(request_factory(dict(bearer, **{"x-real-ip": "1.1.1.1"})))
-        b = rate_limit_key(request_factory(dict(bearer, **{"x-real-ip": "2.2.2.2"})))
-        assert a == b
+    def test_key_is_stable_across_addresses_for_one_user(self, request_factory):
+        a = self._verified(request_factory({"x-real-ip": "1.1.1.1"}), {"sub": "u"})
+        b = self._verified(request_factory({"x-real-ip": "2.2.2.2"}), {"sub": "u"})
+        assert rate_limit_key(a) == rate_limit_key(b)
+
+    def test_an_untrusted_peer_cannot_assert_an_address(self, request_factory):
+        # Without the peer in trusted_proxies the header carries no weight.
+        req = request_factory({"x-real-ip": "1.2.3.4"})
+        assert rate_limit_key(req) == "10.0.0.9"
 
 
 class TestAuthFailureReason:
