@@ -81,7 +81,11 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                  response.status_code, extra=fields)
         return response
 
-limiter = Limiter(key_func=rate_limit_key)   # JWT sub, falling back to client IP
+# Verified JWT sub, else the address your proxy asserts, else the socket peer.
+# See "Rate-limit keys" below — trusted_proxies should name only the proxy.
+limiter = Limiter(
+    key_func=lambda r: rate_limit_key(r, trusted_proxies=("172.31.240.10/32",))
+)
 
 reason = auth_failure_reason(request)        # None | malformed_header | missing_token
 if reason:                                   #      | invalid_jwt | expired_token
@@ -230,7 +234,56 @@ logging.getLogger("fabric.common").setLevel(logging.DEBUG)
 `configure_logging()` does this for you. Miss it and the library's debug output is
 unreachable — the root logger is deliberately held at WARNING.
 
-### 7. Installer boilerplate
+### 7. Rate-limit keys
+
+A rate-limit key **is** the bucket, so anything a caller controls can be rotated for a
+fresh bucket per request — bypassing the limit outright rather than merely skewing it. But
+the key also has to distinguish callers: behind a proxy, keying on the socket peer puts
+everyone in one bucket and turns your limit into a service-wide cap.
+
+`rate_limit_key` therefore derives the key from unforgeable inputs only:
+
+1. the token's claim, **only from signature-verified claims** (`require_verified=True`);
+2. `X-Real-IP`, **only when the socket peer is in `trusted_proxies`**;
+3. the socket peer.
+
+```python
+from fabric_mcp_common.integrations.starlette import rate_limit_key, trusted_client_ip
+
+rate_limit_key(request, trusted_proxies=("172.31.240.10/32",))
+trusted_client_ip(request, trusted_proxies=("172.31.240.10/32",))
+```
+
+**`trusted_proxies` should name only the proxy.** A whole private range (`10.0.0.0/8`,
+`172.16.0.0/12`) covers every other container, VPN client and LAN host that can reach the
+port — any of which could then assert an arbitrary `X-Real-IP`. Pin the proxy to a fixed
+address and list that `/32`. Left empty, keying falls back to the socket peer: safe, but a
+shared bucket if a proxy fronts you, so log a warning at startup when it is unset.
+
+**`X-Forwarded-For` is never used for a key**, even from a trusted peer. nginx sets it with
+`$proxy_add_x_forwarded_for`, which *appends* to whatever the client sent, so the left-most
+entry stays caller-controlled. `X-Real-IP` comes from `$remote_addr`, which overwrites. Use
+`client_ip` (which does consult `X-Forwarded-For`) for logs and metric labels only, where a
+spoofed value is misleading rather than a control bypass.
+
+Verified claims come from a verifier — see [Verify signatures](#4-verify-signatures-opt-in).
+Without one, `request_claims` performs an unverified decode, `verified` is always False, and
+keying is per address. `require_verified=False` restores the old behaviour if something
+upstream has already authenticated the token and you accept caller-chosen keys.
+
+#### Migrating from 0.2.x
+
+`rate_limit_key` changed behaviour in 0.3.0. Previously it used the claim from an
+*unverified* decode and fell back to the left-most `X-Forwarded-For` entry — a caller could
+set either.
+
+| If you were relying on | Do this |
+|---|---|
+| per-user keys without a verifier | configure a verifier, or pass `require_verified=False` and accept the risk |
+| per-client keys behind a proxy | pass `trusted_proxies=("<proxy>/32",)` |
+| `client_ip` for logs/metrics | no change — that function is unchanged |
+
+### 8. Installer boilerplate
 
 Every FABRIC MCP server's `install.sh` needs the same opening moves: coloured logging,
 OS and package-manager detection, idempotent package installation, finding a new enough

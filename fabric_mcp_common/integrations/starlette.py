@@ -24,8 +24,10 @@ from fabric_mcp_common.auth.bearer import (
 from fabric_mcp_common.auth.claims import ANONYMOUS, TokenClaims
 from fabric_mcp_common.net import (
     DEFAULT_FORWARDED_HEADERS,
+    OVERWRITING_FORWARDED_HEADER,
     UNKNOWN_IP,
     client_ip_from_headers,
+    peer_in_networks,
 )
 
 #: ``request.state`` attribute used to memoize decoded claims per request.
@@ -136,34 +138,113 @@ def identity_fields(request: Any) -> Dict[str, Any]:
     }
 
 
+def peer_ip(request: Any, default: str = UNKNOWN_IP) -> str:
+    """The socket peer's address — the one thing a remote caller cannot forge."""
+    host = getattr(getattr(request, "client", None), "host", None)
+    return host or default
+
+
+def trusted_client_ip(
+    request: Any,
+    *,
+    trusted_proxies: Sequence[str] = (),
+    header: str = OVERWRITING_FORWARDED_HEADER,
+    default: Optional[str] = None,
+) -> str:
+    """Client address usable for a *security* decision.
+
+    Honours *header* only when the socket peer is one of *trusted_proxies*, and
+    otherwise returns the peer.  That ordering is the point: the peer cannot be
+    forged remotely, so it is what makes the header believable.
+
+    Prefer this over :func:`client_ip` anywhere the result gates behaviour — a
+    rate-limit bucket, an allowlist, a lockout counter.  :func:`client_ip` exists
+    for logs and metric labels, where a spoofed value is misleading rather than a
+    control bypass.
+
+    Args:
+        trusted_proxies: CIDRs or addresses permitted to assert the client
+            address.  **Empty by default: trust nobody.**  List only the proxy
+            itself — a whole private range covers every other container, VPN
+            client and LAN host that can reach the port, any of which could then
+            forge *header*.
+        header: Header consulted, defaulting to
+            :data:`~fabric_mcp_common.net.OVERWRITING_FORWARDED_HEADER`.  Do not
+            pass ``x-forwarded-for``: proxies typically append to it, so its
+            left-most entry stays caller-controlled even on a trusted hop.
+        default: Returned when there is no peer at all.
+
+    Note:
+        With no *trusted_proxies* every caller behind a proxy collapses to the
+        proxy's address — one shared bucket.  That is safe but can cap a whole
+        service, so configure the proxy explicitly and say so at startup.
+    """
+    fallback = UNKNOWN_IP if default is None else default
+    peer = getattr(getattr(request, "client", None), "host", None)
+    if peer_in_networks(peer, trusted_proxies):
+        # Case-insensitive, matching client_ip_from_headers: header names are
+        # case-insensitive per RFC 9110, and not every request object lowercases.
+        lowered = {
+            k.lower(): v for k, v in _headers(request).items() if isinstance(k, str)
+        }
+        asserted = lowered.get(header.lower())
+        if asserted:
+            return str(asserted).strip()
+    return peer or fallback
+
+
 def rate_limit_key(
     request: Any,
     *,
     claim: str = "sub",
-    forwarded_headers: Sequence[str] = DEFAULT_FORWARDED_HEADERS,
+    require_verified: bool = True,
+    trusted_proxies: Sequence[str] = (),
+    header: str = OVERWRITING_FORWARDED_HEADER,
     default: Optional[str] = None,
 ) -> str:
-    """Per-caller rate-limit key.
+    """Per-caller rate-limit key, derived only from unforgeable inputs.
 
-    Uses the token's *claim* for authenticated requests so a user is limited
-    consistently across addresses, and falls back to the client IP otherwise.
+    The key *is* the bucket, so anything a caller controls can be rotated for a
+    fresh bucket per request — which bypasses the limit outright rather than
+    merely skewing it.  Order:
+
+    1. the token's *claim*, but only from signature-verified claims while
+       *require_verified* is set;
+    2. *header*, but only when the socket peer is one of *trusted_proxies*;
+    3. the socket peer.
 
     Args:
         claim: Claim used as the key, ``sub`` by default.
-        forwarded_headers: Proxy headers consulted for the IP fallback.
-        default: Key used when neither the claim nor any address identifies the
-            caller.  Pass the framework's own remote-address value — e.g.
-            SlowAPI's ``get_remote_address(request)`` — to keep behaviour
-            consistent with the rest of the limiter.  Defaults to
-            :data:`UNKNOWN_IP`.
+        require_verified: Use *claim* only when the claims came from a
+            signature-verified decode.  **On by default**, and leaving it on is
+            strongly advised: :func:`request_claims` performs an *unverified*
+            payload decode, and a JWT payload can be written by hand with no
+            signing key, so an unverified claim is attacker-controlled.  Set it
+            False only if something upstream has already authenticated the token
+            and you accept per-caller keys a client can choose.
+        trusted_proxies: Passed to :func:`trusted_client_ip`; empty means trust
+            no forwarded header.
+        header: Passed to :func:`trusted_client_ip`.
+        default: Key used when nothing identifies the caller.  Pass the
+            framework's own remote-address value — e.g. SlowAPI's
+            ``get_remote_address(request)`` — to stay consistent with the rest of
+            the limiter.
+
+    .. versionchanged:: 0.3.0
+        Previously used *claim* from an unverified decode and fell back to the
+        left-most ``X-Forwarded-For`` entry, both of which a caller could set.
+        Now verified-only and trusted-peer-gated by default.
     """
-    value = request_claims(request).get(claim)
-    if value:
-        return str(value)
-    return client_ip(
+    claims = request_claims(request)
+    if not require_verified or claims.verified:
+        value = claims.get(claim)
+        if value:
+            return str(value)
+    return trusted_client_ip(
         request,
-        forwarded_headers=forwarded_headers,
-        default=UNKNOWN_IP if default is None else default,
+        trusted_proxies=trusted_proxies,
+        header=header,
+        default=default,
     )
 
 
@@ -218,6 +299,7 @@ def auth_failure_reason(
 __all__ = [
     "CLAIMS_STATE_ATTR",
     "DEFAULT_FORWARDED_HEADERS",
+    "OVERWRITING_FORWARDED_HEADER",
     "REASON_EXPIRED_TOKEN",
     "REASON_INVALID_JWT",
     "REASON_MALFORMED_HEADER",
@@ -227,7 +309,9 @@ __all__ = [
     "client_ip",
     "identity",
     "identity_fields",
+    "peer_ip",
     "rate_limit_key",
     "request_claims",
     "request_token",
+    "trusted_client_ip",
 ]
