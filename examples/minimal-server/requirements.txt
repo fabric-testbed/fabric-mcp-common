@@ -1,0 +1,10 @@
+# Pinned below 4.0: fastmcp 4.x depends on mcp 2.x, which restructured
+# mcp.server. Lift the cap only together with a tested upgrade.
+fastmcp>=3,<4
+
+# [metrics] pulls prometheus-client + starlette. Drop the extra if you do not
+# instrument; the library core has zero dependencies.
+fabric_mcp_common[metrics]>=0.3.0
+
+slowapi
+uvicorn

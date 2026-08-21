@@ -1,0 +1,40 @@
+# Minimal deployment: nginx terminating TLS in front of the server.
+#
+# The rate-limit trust boundary is the interesting part. mcp-server trusts
+# X-Real-IP from exactly one address, so nginx is pinned to it. Keep
+# RATE_LIMIT_TRUSTED_PROXIES and nginx's ipv4_address in step.
+#
+# If you change the subnet, `docker compose down` first — Docker will not
+# re-IPAM an existing network, and a static IP outside the old subnet stops the
+# container from starting.
+services:
+  mcp-server:
+    build: .
+    container_name: my-mcp
+    restart: always
+    networks:
+      - frontend
+    # No `ports:` — reachable only through nginx. The trust model below assumes
+    # that; publishing a port here would let callers bypass the proxy.
+    environment:
+      LOG_FORMAT: json
+      RATE_LIMIT: 60/minute
+      RATE_LIMIT_TRUSTED_PROXIES: 172.31.241.10/32
+
+  nginx:
+    image: nginx:latest
+    container_name: my-mcp-nginx
+    restart: always
+    networks:
+      frontend:
+        ipv4_address: 172.31.241.10
+    ports:
+      - 443:443
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+networks:
+  frontend:
+    ipam:
+      config:
+        - subnet: 172.31.241.0/24

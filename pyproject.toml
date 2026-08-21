@@ -65,7 +65,11 @@ test = [
 name = "fabric_mcp_common"
 
 [tool.flit.sdist]
-include = ["tests/"]
+# examples/ ships in the sdist so the test suite bundled alongside it is complete
+# — tests/test_example_server.py checks the example against this library's API and
+# would otherwise skip. It is deliberately absent from the *wheel*: it is a
+# template to copy, not runtime code.
+include = ["tests/", "examples/"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

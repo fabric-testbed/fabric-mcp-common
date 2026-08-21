@@ -1,0 +1,28 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "my_mcp"
+version = "0.1.0"
+description = "Example FABRIC MCP server"
+requires-python = ">=3.11"
+dependencies = [
+    # Keep in step with requirements.txt: the Dockerfile installs from that
+    # file, while `pip install .` uses this one. Pinning only one leaves the
+    # other open — that exact split caused a production outage.
+    "fastmcp>=3,<4",
+    "fabric_mcp_common[metrics]>=0.3.0",
+    "slowapi",
+    "uvicorn",
+]
+
+[project.scripts]
+my-mcp = "my_mcp.__main__:main"
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-asyncio"]
+
+[tool.pytest.ini_options]
+addopts = "-ra -q"
+testpaths = ["tests"]
