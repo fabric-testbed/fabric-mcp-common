@@ -9,17 +9,52 @@ That is the same shape as the break that took a downstream deploy down — an
 upstream release, no change here, and a consumer discovering it in production.
 This module closes it by exercising the adapter through fastmcp's own ASGI app.
 
-Skipped unless fastmcp is installed, so the default ``[test]`` run is unaffected.
-CI installs the ``[fastmcp]`` extra in a dedicated job and runs this nightly.
+Skipped unless fastmcp is installed, so the default ``[test]`` run is unaffected —
+**except** when ``FMC_REQUIRE_FASTMCP`` is set, which CI does in the job that
+installs the extra on purpose. There, a failed import is the break this file
+exists to catch, and skipping would report green: the job runs the whole suite,
+so a skipped file leaves ~498 other tests passing and an exit code of 0.
+
+That is not hypothetical. ``pytest.importorskip`` alone made this file silently
+inert whenever the installed fastmcp was broken — the exact condition it is
+supposed to detect.
 """
 from __future__ import annotations
 
+import importlib
 import inspect
+import os
 
 import pytest
 
-fastmcp = pytest.importorskip("fastmcp", reason="requires the [fastmcp] extra")
-pytest.importorskip("starlette", reason="needs starlette's TestClient")
+#: Set by CI wherever the [fastmcp] extra is installed deliberately. Turns "I
+#: could not import it" from a skip into a failure.
+REQUIRE_FASTMCP = os.environ.get("FMC_REQUIRE_FASTMCP", "") not in (
+    "",
+    "0",
+    "false",
+    "False",
+)
+
+
+def _require_or_skip(module: str) -> None:
+    try:
+        importlib.import_module(module)
+    except Exception as exc:  # noqa: BLE001 - any import failure counts
+        if REQUIRE_FASTMCP:
+            raise RuntimeError(
+                f"FMC_REQUIRE_FASTMCP is set but {module!r} failed to import: "
+                f"{exc!r}. The extra is installed in this job, so this is a real "
+                "break — not a reason to skip these tests."
+            ) from exc
+        pytest.skip(
+            f"requires the [fastmcp] extra ({module} unavailable)",
+            allow_module_level=True,
+        )
+
+
+_require_or_skip("fastmcp")
+_require_or_skip("starlette")
 
 from fabric_mcp_common.integrations.fastmcp import (  # noqa: E402
     current_token,

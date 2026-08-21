@@ -78,6 +78,11 @@ jobs:
     # authenticated call silently looks anonymous rather than failing loudly.
     name: fastmcp contract (latest release)
     runs-on: ubuntu-latest
+    env:
+      # The extra is installed on purpose here, so a failed import is the break
+      # this job exists to find. Without this the contract file would skip and
+      # the job would report green off the other ~498 tests.
+      FMC_REQUIRE_FASTMCP: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -87,6 +92,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e '.[fastmcp,test]'
+      - name: Assert the extra actually landed
+        # Belt and braces alongside FMC_REQUIRE_FASTMCP: if the install silently
+        # produced no fastmcp, fail here rather than in a confusing skip.
+        run: python -c "import fastmcp, fastmcp.server.dependencies; print('fastmcp importable')"
       - name: Show the resolved fastmcp
         run: pip list | grep -iE '^(fastmcp|fastmcp-slim|mcp) '
       - name: Run the whole suite, contract tests included
@@ -100,6 +109,10 @@ jobs:
     name: fastmcp contract (prerelease, advisory)
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      # Same reasoning: a prerelease that cannot even be imported is exactly the
+      # signal we want, not a skip.
+      FMC_REQUIRE_FASTMCP: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
